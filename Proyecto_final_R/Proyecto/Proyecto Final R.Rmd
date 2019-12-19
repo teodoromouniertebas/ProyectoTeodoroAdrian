@@ -1,0 +1,832 @@
+---
+title: "Análisis de los crímenes en Europa desde 1993 hasta 2007"
+author: "Adrián García Sierra y Teodoro Mounier Tebas"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: paper
+    highlight: textmate 
+    toc: 3
+    toc_float: yes
+    self_contained: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, message = FALSE, warning = FALSE,
+#fig.width = 7, fig.height = 7,
+#out.width = 7, out.height = 7,
+#collapse = TRUE,  fig.show = "hold", out.width = "75%", fig.align = "center")
+collapse = TRUE,  fig.show = "hold",
+out.width = "75%")
+```
+
+--------------------
+
+## Introducción
+
+Hemos elegido hacer nuestro análisis con datos sobre los diferentes delitos que hay en Europa. Para ello hemos descargado de **Eurostat** un Data Frame que recoge los **delitos registrados por la policía en función de la categoría de delito**, *( número de delincuentes)* [aquí](https://ec.europa.eu/eurostat/data/database?node_code=org) lo teneis.
+
+```{r imagen, fig.align='center', echo=FALSE}
+knitr::include_graphics(here::here("./datos/imagen/imagen1.png"))
+```
+
+
+
+
+
+--------------------
+
+## 1-LOS DATOS
+
+### 1.1 Datos originales
+
+ * Antes llamamos a los **paquetes** que nos haran falta :
+```{r library, echo=TRUE}
+library(tidyverse)
+library(eurostat)
+library(rio)
+library(gganimate)
+library(viridis)
+library(summarytools)
+library(kableExtra)
+library(gridExtra)
+```
+ 
+ * Los datos originales recogen 6 tipos de delitos:
+    + Homicidios 
+    + Actos que causan daño o pretenden causar daño a la persona, actos lesciosos de naturaleza sexual y actos contra la propiedad que impliquen violencia o amenaza contra una persona
+    + Robos
+    + Robos en residencias privadas
+    + Robo de vehículo terrestre motorizado
+    + Actos ilícitos que implican drogras o precursores controlados
+  
+para **39 paises Europeos**, desde **1993** hasta **2007**.
+
+
+### 1.2 Descargar los datos 
+
+ * Vamos a descargar los datos con el paquete de Eurostat directamente y empezar a limpiarlos con algunas funcciones del Tidyverse :
+
+```{r descargar, echo=TRUE}
+df <- get_eurostat("crim_gen",time_format = 'raw')
+df <- label_eurostat(df, code = c("geo","iccs"))
+
+df <- df %>% select(geo_code,geo,iccs_code,iccs,time,values) %>%
+             mutate(time = as.numeric(time)) %>%
+             rename(infraccion = iccs, code_pais = geo_code, pais = geo, anyo = time, numinf = values)
+```
+Los datos tienen **`r length(df)`** variables y recogen en total **`r nrow(df)`** valores.
+
+
+### 1.3 Limpiar los datos
+
+ * Vamos a limpiar los datos para que el analisis resulte más fácil :   
+   + Vamos a quitar la información que se solapa como por ejemplo los valores de **Francia** , ya que son los mismos que **Francia Metropolitan**.
+   + Vamos a quitar el **Total**.
+   + Vamos a asignar otros nombres a las infracciones con la funccion *case_when*.
+   
+```{r Limpiar, echo=TRUE}
+df <- df %>% filter(code_pais !="FX" & iccs_code != "TOTAL") %>% filter(code_pais !="TR") #Quito Turquia tambien ^^
+
+df <-df %>% mutate(infraccion = case_when( 
+            infraccion == "Intentional homicide" ~ "Homicidios",
+            infraccion == "Acts causing harm or intending to cause harm to the person, injurious acts of a sexual nature and acts against property involving violence or threat against a person"  ~ "Actos violentos",
+            infraccion == "Robbery"  ~ "Robos",
+            infraccion == "Burglary of private residential premises"  ~ "Robo en residencias privadas",
+            infraccion == "Theft of a motorized land vehicle"  ~ "Robo de vehiculos",
+            infraccion == "Unlawful acts involving controlled drugs or precursors"  ~ "Actos ilicitos con drogas", TRUE ~ as.character(infraccion)))
+
+df <-df %>% mutate(pais = case_when( 
+  pais == "Germany (until 1990 former territory of the FRG)" ~ "Germany",
+  pais == "England and Wales"  ~ "RU",
+  TRUE ~ as.character(pais)))
+```
+Ahora nos quedan **`r length(df)`** variables y recogen **`r nrow(df)`** valores.
+
+
+Para no volver a empenzar desde 0 hemos exportado nuestro **df** limpio en nuestra carpeta de datos del proyecto.
+
+```{r Guardar, echo=TRUE}
+rio::export(df, "./datos/df_crim_gen.rds")
+```
+
+
+### 1.4 ¿Cómo son los datos?
+
+ * Con la funccion *str()* podemos el tipo de datos de os que disponemos:
+```{r ver datos1, echo=FALSE}
+df <- rio::import("./datos/df_crim_gen.rds")
+
+str(df)
+```
+
+
+ * Y con la funccion *dfSummary* tenemos un resumen de estos :
+
+```{r ver datos2, echo=FALSE}
+dfSummary(df)
+```
+
+
+--------------------
+
+## 2-PREGUNTAS INTERESANTES 
+
+### 2.1 ¿Cuál es la evolución de los delitos en Europa? 
+
+ * Dejamos el **código** para el primer mapa :
+ 
+```{r mapa1a, echo=TRUE, out.width="120%", fig.align="center"}
+df1a <- df %>% filter(iccs_code == "ICCS0101") %>% 
+  group_by(anyo, numinf) %>% 
+  arrange(numinf) %>% 
+  ungroup() %>% 
+  group_by(iccs_code) %>% 
+  mutate(cat_inf = cut_to_classes(numinf, n = 6)) %>% 
+  ungroup()
+              
+
+geometrias <- get_eurostat_geospatial(resolution = "20", nuts_level = "0")
+mapdata <- full_join(df1a, geometrias, by = c("code_pais" = "id"))
+
+
+mapdata_1a <- mapdata %>%  filter(iccs_code == "ICCS0101", anyo %in% c(1994,2000,2007))
+
+p <- ggplot(mapdata_1a) +
+     geom_sf(aes(fill = cat_inf, geometry = geometry), color = "black", size = .1) +
+     facet_wrap( ~ anyo) +
+     scale_fill_brewer(palette = "RdYlBu", direction = -1)  +
+     labs(title = "Número de homicidios en Europa en 1994, 2000 y 2007",
+     subtitle = "(Para Europa)",
+     fill = "Intencional homicide",
+     caption = "Datos Eurostat") + 
+     theme_linedraw() +
+     coord_sf(xlim = c(-10,29), ylim = c(35,70))
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+
+```{r mapa1b, echo=FALSE,out.width="120%", fig.align="center"}
+df1b <- df %>% filter(iccs_code == "ICCS0401") %>% 
+  group_by(anyo, numinf) %>% 
+  arrange(numinf) %>% 
+  ungroup() %>% 
+  group_by(iccs_code) %>% 
+  mutate(cat_inf  = cut_to_classes(numinf, n = 6)) %>% 
+  ungroup()
+              
+geometrias <- get_eurostat_geospatial(resolution = "20", nuts_level = "0")
+mapdata <- full_join(df1b, geometrias, by = c("code_pais" = "id"))
+
+mapdata_1b <- mapdata %>%  filter(iccs_code == "ICCS0401", anyo %in% c(1998,2000,2007))
+
+p <- ggplot(mapdata_1b) +
+     geom_sf(aes(fill = cat_inf, geometry = geometry), color = "black", size = .1) +
+     facet_wrap( ~ anyo) +
+     scale_fill_brewer(palette = "RdYlBu", direction = -1)  +
+     labs(title = "Número de robos en Europa en 1998, 2000 y 2007",
+     subtitle = "Datos Eurostat",
+     fill = "Robbery",
+     caption = "Datos Eurostat") + 
+     theme_linedraw() +
+     coord_sf(xlim = c(-10,29), ylim = c(35,70))
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+```{r mapa1c, echo=FALSE, out.width="120%", fig.align="center"}
+df1c <- df %>% filter(iccs_code == "ICCS0601") %>% 
+  group_by(anyo, numinf) %>% 
+  arrange(numinf) %>% 
+  ungroup() %>% 
+  group_by(iccs_code) %>% 
+  mutate(cat_inf  = cut_to_classes(numinf, n = 6)) %>% 
+  ungroup()
+              
+geometrias <- get_eurostat_geospatial(resolution = "20", nuts_level = "0")
+mapdata <- full_join(df1c, geometrias, by = c("code_pais" = "id"))
+
+mapdata_1c <- mapdata %>%  filter(iccs_code == "ICCS0601", anyo %in% c(1998,2000,2007))
+
+p <- ggplot(mapdata_1c) +
+     geom_sf(aes(fill = cat_inf, geometry = geometry), color = "black", size = .1) +
+     facet_wrap( ~ anyo) +
+     scale_fill_brewer(palette = "RdYlBu", direction = -1)  +
+     labs(title = "Número de actos ilícitos con drogas en Europa en 1998, 2000 y 2007",
+     subtitle = "Datos Eurostat",
+     fill = "Actos ilícitos con Drogas",
+     caption = "Datos Eurostat") + 
+     theme_linedraw() +
+     coord_sf(xlim = c(-10,29), ylim = c(35,70))
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+### 2.2 ¿Cuales son los 5 países europeos donde hay más infracciones en funccion de cada tipo de estas? *(homicidios, Robos, Actos violentos, etc)*
+
+ * Arreglamos un poco el **df** pasando a **df2**:
+ 
+```{r df2, echo=TRUE}
+df2 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, pais, infraccion) %>% 
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>% 
+  rename(numinf_total = 4)
+```
+
+  
+
+
+ * Como antes, para el Primer Grafico dejamos el **Código** asi podeis ver cómo lo hemos hecho :
+
+```{r mapa2a, echo=TRUE, fig.align="center"}
+df2a <- df2 %>% filter(infraccion == "Robos" & anyo == 2007) %>% 
+  group_by(pais) %>% 
+  summarise(sum(NN = numinf_total)) %>% 
+  ungroup() %>% 
+  rename(numinf_robos = 2) %>% 
+  arrange(desc(numinf_robos)) %>% 
+  slice(c(1:5))
+
+df2a <- df2a %>% 
+  mutate(numinf_robos = forcats::as_factor(numinf_robos)) %>%
+  mutate(numinf_robos = forcats::fct_infreq(numinf_robos))
+
+p <- ggplot(df2a) +
+     geom_col(mapping = aes(x = pais, y = fct_infreq(numinf_robos), fill = pais)) +
+     scale_fill_brewer(palette = "Spectral", direction = -1)  +
+     labs(title = "5 Países con más robos en 2007",
+     fill = "Paises",
+     caption = "Datos Eurostat") + 
+     ylab(label = "Número de robos") + 
+     theme_classic()
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+```{r mapa2b, echo=FALSE,fig.align="center"}
+df2b <- df2 %>% filter(infraccion == "Homicidios" & anyo == 2007) %>% 
+  group_by(pais) %>% 
+  summarise(sum(NN = numinf_total)) %>% 
+  ungroup() %>% 
+  rename(numinf_homicidios = 2) %>% 
+  arrange(desc(numinf_homicidios)) %>% 
+  slice(c(1:5))
+
+df2b <- df2b %>% 
+  mutate(numinf_homicidios = forcats::as_factor(numinf_homicidios)) %>%
+  mutate(numinf_homicidios = forcats::fct_infreq(numinf_homicidios))
+
+p <- ggplot(df2b) +
+     geom_col(mapping = aes(x = pais, y = fct_infreq(numinf_homicidios), fill = pais)) +
+     scale_fill_brewer(palette = "Spectral", direction = -1)  +
+     labs(title = "5 Países con más homiciodios en 2007",
+     fill = "Paises",
+     caption = "Datos Eurostat") + 
+     ylab(label = "Número de homicidios") + 
+     theme_classic()
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+```{r mapa2c, echo=FALSE,fig.align="center"}
+df2c <- df2 %>% filter(infraccion == "Actos ilicitos con drogas" & anyo == 2007) %>% 
+  group_by(pais) %>% 
+  summarise(sum(NN = numinf_total)) %>% 
+  ungroup() %>% 
+  rename(numinf_drogas = 2) %>% 
+  arrange(desc(numinf_drogas)) %>% 
+  slice(c(1:5))
+
+df2c <- df2c %>% 
+  mutate(numinf_drogas = forcats::as_factor(numinf_drogas)) %>%
+  mutate(numinf_drogas = forcats::fct_infreq(numinf_drogas))
+
+p <- ggplot(df2c) +
+     geom_col(mapping = aes(x = pais, y = fct_infreq(numinf_drogas), fill = pais)) +
+     scale_fill_brewer(palette = "Spectral", direction = -1)  +
+     labs(title = "5 Países con más actos ilícitos en relacion a las drogas en 2007",
+     fill = "Paises",
+     caption = "Datos Eurostat") + 
+     ylab(label = "Número de actos ilícitos con droga") + 
+     theme_classic()
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+### 2.3 ¿Cuál es la proporción de cada infraccion en las infracciones totales para Francia, Alemania, Espana, Italia?
+
+#### a) Para Francia :
+
+ * Así hemos arreglado el **df** :
+
+```{r df3a, echo=TRUE}
+df3a <- df %>% select(anyo, pais, infraccion, numinf) %>%
+  filter(pais == "France" & anyo == 2007) %>%
+  mutate(Prop_infraccion = (numinf/sum(numinf))*100) %>%
+  arrange(Prop_infraccion) %>%
+  ungroup()
+
+df3b <- df3a %>% mutate(Prop_infraccion = forcats::as_factor(Prop_infraccion)) 
+df3b <- df3b %>% mutate(Prop_infraccion = forcats::fct_infreq(Prop_infraccion))
+```
+
+
+```{r mapa3a, echo=FALSE,fig.height=3, fig.show="hold", fig.width=11, out.width="100%"}
+p1 <- ggplot(df3a) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2") +
+     scale_fill_brewer(palette = "Reds", direction = -1) +
+     labs(title = "Tipos de infracciones en Francia en 2007",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") +
+     xlab(NULL) +
+     ylab(label = "Proporción en %") + 
+     theme_classic()
+p1 <- p1 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))
+
+p2 <- ggplot(df3b) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2")+
+     scale_fill_brewer(palette = "Dark2", direction = 1) +
+     labs(title = "Ordenadas",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") + 
+     xlab(NULL) +
+     ylab(label = "Proporcion en %") + 
+     theme_classic()
+p2 <- p2 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))
+grid.arrange(p1, p2, nrow = 1)
+```
+
+#### b) Para España :
+
+```{r df3c, echo=FALSE}
+df3c <- df %>% select(anyo, pais, infraccion, numinf) %>%
+  filter(pais == "Spain" & anyo == 2007) %>%
+  mutate(Prop_infraccion = (numinf/sum(numinf))*100) %>%
+  arrange(Prop_infraccion) %>%
+  ungroup()
+
+df3d <- df3c %>% mutate(Prop_infraccion = forcats::as_factor(Prop_infraccion)) 
+df3d <- df3d %>% mutate(Prop_infraccion = forcats::fct_infreq(Prop_infraccion))
+```
+
+```{r mapa3d, echo=FALSE,fig.height=3, fig.show="hold", fig.width=11, out.width="100%"}
+p3 <- ggplot(df3c) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2")+
+     scale_fill_brewer(palette = "Reds", direction = -1) +
+     labs(title = "Tipos de infracciones en Espana en 2007",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") + 
+     xlab(NULL) +
+     ylab(label = "Proporción en %") + 
+     theme_classic()
+p3 <- p3 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))
+p4 <- ggplot(df3d) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2")+
+     scale_fill_brewer(palette = "Dark2", direction = 1) +
+     labs(title = "Ordenadas",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") + 
+     xlab(NULL) +
+     ylab(label = "Proporción en %") + 
+     theme_classic()
+p4 <- p4 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))
+grid.arrange(p3, p4, nrow = 1)
+```
+
+
+#### c) Para Francia, España, Alemania,RU al mismo tiempo:
+
+```{r df3e, echo=FALSE}
+df3e <- df %>% select(anyo, pais, infraccion, numinf) %>%
+  filter(pais %in% c("France","Spain","Germany","RU") & anyo == 2007) %>%
+  group_by(pais) %>%
+  mutate(Prop_infraccion = (numinf/sum(numinf))*100) %>%
+  ungroup()
+
+df3f <- df3e %>% mutate(Prop_infraccion = forcats::as_factor(Prop_infraccion)) 
+df3f <- df3f %>% mutate(Prop_infraccion = forcats::fct_infreq(Prop_infraccion)) 
+```
+
+```{r mapa3f, echo=FALSE,fig.height=5, fig.show="hold", fig.width=8, out.width="100%"}
+p5 <- ggplot(df3e) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2")+
+     scale_fill_brewer(palette = "Reds", direction = -1) +
+     labs(title = "Tipos de infracciones en Francia, España, Alemania y RU 
+                         en 2007",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") + 
+     ylab(label = "Proporción en %") + 
+     theme_classic()
+p5 <- p5 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))+
+         theme(axis.title.x = element_text(size=12))
+p5
+p6 <- ggplot(df3f) + geom_col(aes(x = pais, y = Prop_infraccion, fill = infraccion), position = "dodge2")+
+     scale_fill_brewer(palette = "Dark2", direction = 1) +
+     labs(title = "Tipos de infracciones en Francia, España, Alemania 
+                  y RU en 2007",
+     fill = "Infracciones",
+     caption = "Datos Eurostat") + 
+     ylab(label = "Proporción en %") + 
+     theme_classic()
+p6 <- p6 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=12))+
+         theme(axis.title.x = element_text(size=12))
+p6
+```
+
+
+
+
+### 2.4 Mostrar la evolución del número de actos ílicitos en Europa y comparar
+
+#### a) En toda Europa desde el año 1993 hasta el 2007 en un único gráfico:
+
+Para ello hemos **reescalado** las infracciones para poder enseñarlas en el mismo gráfico y sobre todo poder comparar las evoluciones en terminos relativos.
+
+```{r df4a, echo=TRUE}
+df4a <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+               group_by(anyo, infraccion) %>% 
+               summarise(sum(NN = numinf)) %>% 
+               ungroup() %>%
+               rename(numinf_total = 3)
+
+#Reescalamos con la funccion rescaled_inf :
+df4a <-df4a %>% group_by(infraccion) %>% 
+                mutate(rescaled_inf = 100*numinf_total/numinf_total[1])
+```
+
+
+ * La gráfica :
+
+```{r mapa4a, echo=FALSE,,fig.align="center",out.width="90%"}
+p <-ggplot(df4a, mapping = aes(x = anyo, y = rescaled_inf, group = infraccion, color = infraccion)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_viridis_d() + 
+    labs(title ="Evolución de las infracciones en Europa",
+    subtitle = "(Para Europa)",
+    caption = "Datos de Eurostat",
+    y = "Número de infracciones año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+
+#### b) Vamos a comparar las evoluciones de cada tipo de delito entre Francia y España:
+
+```{r mapa4b12, echo=FALSE, fig.height=3, fig.show="hold", fig.width=9, out.width="100%"}
+df4b1 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Actos ilicitos con drogas") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b1 <-df4b1 %>% group_by(infraccion, pais) %>% 
+                  mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>%
+                  ungroup()
+
+p1 <-ggplot(df4b1, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red"))+ 
+    labs(title ="Evolución de los delitos 
+          relacionados a drogas",
+    y = "Número de delitos con drogas año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p1 <- p1 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+
+df4b2 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Homicidios") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b2 <-df4b2 %>% group_by(infraccion, pais) %>% mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>% ungroup()
+
+p2 <-ggplot(df4b2, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red")) + 
+    labs(title ="Evolución de los homicidios",
+    caption = "Datos de Eurostat", 
+    y = "Número de homicidios año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p2 <- p2 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r mapa4b34, echo=FALSE, fig.height=3, fig.show="hold", fig.width=9, out.width="100%"}
+df4b3 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Robos") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b3 <-df4b3 %>% group_by(infraccion, pais) %>% 
+                  mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>% 
+                  ungroup()
+
+p1 <-ggplot(df4b3, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red")) + 
+    labs(title ="Evolución de los Robos",
+    y = "Número de robos año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p1 <- p1 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+
+
+df4b4 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Robo de vehiculos") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b4 <-df4b4 %>% group_by(infraccion, pais) %>% mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>% ungroup()
+
+p2 <-ggplot(df4b4, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red")) + 
+    labs(title ="Evolución de robos de vehículo",
+    caption = "Datos de Eurostat", 
+    y = "Número de robos de vehículo año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p2 <- p2 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+
+           theme(axis.title.x = element_text(size=8))
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r mapa4b56, echo=FALSE, fig.height=3, fig.show="hold", fig.width=9, out.width="100%"}
+df4b5 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Robo en residencias privadas") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b5 <-df4b5 %>% group_by(infraccion, pais) %>% mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>% ungroup()
+
+p1 <-ggplot(df4b5, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red")) + 
+    labs(title ="Evolución de los robos de residencia",
+    subtitle = "(Para Francia y España)",
+    y = "Número de robos de residencia año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p1 <- p1 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+
+df4b6 <- df %>% select(anyo, pais, infraccion, numinf) %>% 
+  group_by(anyo, infraccion, pais) %>%
+  filter(pais %in% c("France","Spain") & infraccion == "Actos violentos") %>%
+  summarise(sum(NN = numinf)) %>% 
+  ungroup() %>%
+  rename(numinf_total = 4)
+
+df4b6 <-df4b6 %>% group_by(infraccion, pais) %>% mutate(rescaled_inf = 100*numinf_total/numinf_total[1]) %>% ungroup()
+
+p2 <-ggplot(df4b6, mapping = aes(x = anyo, y = rescaled_inf, group = pais, color = pais)) + 
+    geom_point() + 
+    geom_line()+
+    scale_colour_manual(values = c(France = "blue", Spain = "red")) + 
+    labs(title ="Evolución de los Actos violentos",
+    subtitle = "(Para Francia y España)",
+    caption = "Datos de Eurostat", 
+    y = "Número de actos violentos año base 1993") +
+    scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007))+ 
+    theme_linedraw()
+p2 <- p2 + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+
+--------------------
+
+## 3-OTRAS PREGUNTAS INTERESANTES
+
+### 3.1 ¿Están Francia y España por debajo o por encima de la media europea en números de infraccion? 
+
+Hemos conseguido contestar a esta pregunta con la funccion *case_when()*.  
+  * El **código** es :
+  
+```{r df_1, echo=TRUE}
+df_1 <-df %>%
+  select(anyo,code_pais,pais,infraccion,numinf) %>%
+  group_by(pais) %>%
+  mutate(mean_pais = mean(numinf)) %>%
+  ungroup()%>%
+  mutate(mean_europ = mean(numinf)) %>%
+  mutate(GOOD_or_BAD = case_when( 
+    mean_pais > mean_europ ~ "Bad",
+    mean_pais < mean_europ ~ "Good"))
+```
+
+ * Despues hemos descargado las **geometrias** del Eurostat :
+
+```{r geometrias, echo=TRUE}
+geometrias <- get_eurostat_geospatial(resolution = "20", nuts_level = "0")
+mapdata <- full_join(df_1, geometrias, by = c("code_pais" = "id"))
+```
+
+ * Y sale un gráfico así :
+
+```{r mapa_1, echo=FALSE,fig.align="center"}
+mapdata_1a <- mapdata %>%  filter(anyo %in% c(1994:2007))
+
+p <- ggplot(mapdata_1a) +
+     geom_sf(aes(fill = GOOD_or_BAD, geometry = geometry), color = "black", size = .1) +
+     labs(title = "Gráfico representando los países europeos que tienen en media 
+     más o menos infracciones comparando a la media europea",
+     subtitle = "(entre 1994 y 2007)",
+     fill = "Países por encima o debajo?",
+     caption = "Datos Eurostat") + 
+     theme_linedraw() +
+     coord_sf(xlim = c(-10,29), ylim = c(35,70))
+p <- p + theme(plot.title = element_text(face = "bold"))+
+         theme(axis.title.y = element_text(size=8))+
+         theme(axis.title.x = element_text(size=8))
+p
+```
+
+
+
+### 3.2 Muestra la evolución del número de infracciones por cada tipo para Francia y España
+
+Como ya hemos contestado un poco a esta pregunta en los apartados anteriores ahora lo vamos a hacer pero de manera dinámica con el paquete *gganimate*.
+
+#### a) Para los Homicidios :
+
+* El **código** es :
+
+```{r df_2a, echo=TRUE ,fig.align="center"}
+df_2a <- df %>% filter(pais %in% c("Spain","France") &  infraccion == "Homicidios")
+p<-ggplot(df_2a, aes(anyo, numinf, group =pais, colour = pais)) +
+   geom_line() +
+   geom_point() +
+   scale_colour_manual(values = c(France = "blue", Spain = "red")) +
+   labs(title ="Evolución de los homicidios en Francia y España",
+   subtitle = "(Desde 1993 hasta 2007)",
+   caption = "Datos de Eurostat",
+   y = "Número de homicidios") +
+   scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007)) +
+   transition_reveal(anyo)+
+   theme_linedraw()
+p <-p + theme(plot.title = element_text(face = "bold")) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12))
+p
+```
+
+
+#### b) Para los delitos relacionados con drogas :
+
+```{r df_2b, echo=FALSE,fig.align="center"}
+df_2b <- df %>% filter(pais %in% c("Spain","France") &  infraccion == "Actos ilicitos con drogas")
+p<-ggplot(df_2b, aes(anyo, numinf, group =pais, colour = pais)) +
+   geom_line() +
+   geom_point() +
+   scale_colour_manual(values = c(France = "blue", Spain = "red")) +
+   labs(title ="Evolución de los actos ilícitos relacionados a drogas 
+                            en Francia y España",
+   subtitle = "(Desde 1993 hasta 2007)",
+   caption = "Datos de Eurostat", 
+   y = "Número de actos ilícitos con drogas") +
+   scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007)) +
+   transition_reveal(anyo) +
+   xlab(NULL) +
+   theme_linedraw()
+p <-p + theme(plot.title = element_text(face = "bold")) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12))
+p
+```
+
+#### c) Para el resto de infracciones :
+
+```{r df_2c, echo=FALSE,fig.align="center"}
+df_2c <- df %>% filter(pais %in% c("Spain","France") & infraccion != c("Homicidios") & infraccion != c("Actos ilicitos con drogas")) %>% group_by(infraccion)
+p<-ggplot(df_2c, aes(anyo, numinf, group =pais, colour = pais)) +
+   geom_line() +
+   geom_point() +
+   facet_wrap(~ infraccion, nrow = 2) +
+   scale_colour_manual(values = c(France = "blue", Spain = "red")) +
+   labs(title =  "Evolución de las infracciones en Francia y España",
+   caption = "Datos de Eurostat", 
+   y = "Número de infracciones") +
+   scale_x_continuous(breaks = seq(1993, 2007, 2), limits = c(1993, 2007)) +
+   transition_reveal(anyo) +
+   xlab(NULL) +
+   theme_linedraw()
+p <-p + theme(plot.title = element_text(face = "bold")) +
+        theme(axis.title.y = element_text(size=12)) +
+        theme(axis.title.x = element_text(size=12))
+p
+```
+
+
+### 3.3 ¿Una Tabla?
+
+Para la tabla hemos realizado una tabla que recoge para cada país el **porcentaje de cada tipo de infraccion** sobre las **infracciones totales** del país.
+
+ * Entonces el **código** es este :
+ 
+```{r Tablacod, echo=TRUE}
+df_3 <- df %>% select(2,4,6) %>%
+        group_by(pais) %>%
+        mutate(numinf_total = sum(NN = numinf)) %>% 
+        group_by(pais,infraccion) %>%
+        mutate(numinf_by_inf_and_country = sum(NN = numinf)) %>%
+        mutate(percent = (numinf_by_inf_and_country/numinf_total)*100) %>%
+        select(1,2,6) %>%
+        slice(1:218) %>%
+        mutate(row_num = 1:n()) %>%
+        pivot_wider(names_from = infraccion, values_from = percent) %>%
+        filter(row_num == "1") %>% select(-2) %>% mutate(Total = "100%")
+
+#Para hacer la Tabla :
+knitr::kable(df_3,format = "html") %>%
+kableExtra::kable_styling(bootstrap_options = c("striped", "hover"),fixed_thead = list(enabled = T, background = "lightgrey"))
+```
+
+
+ * con el paquete *DT::datatable* saldría esto :
+ 
+```{r Tablacod2, echo=TRUE, out.width="50%"}
+DT::datatable(df_3)
+``` 
+
+## 4- CONCLUSIÓN 
+
+
+
+### 4.1 Bibliografia
+
+Para la realizacion del trabajo hemos utilizado todos los tutoriales de clase. Ademas hemos utilizado tutoriales de internet :
+
+Para importar los datos : **IMPORT**
+
+- [Tutorial for the eurostat R package](https://ropengov.github.io/eurostat/articles/eurostat_tutorial.html). Encontrado en internet et realizado por Leo Lahti, Janne Huovari, Markus Kainu, Przemyslaw Biecek.
+
+Para limpiar los datos : **TIDY**
+
+- [El Cheatsheet del Tidyr](https://tidyr.tidyverse.org/). Que esta en la plataforma *tidyverse.org*.
+
+Para transformar los datos : **TRANSFORM**
+
+- [R para Ciencia de Datos](https://es.r4ds.hadley.nz/). Un libro de *Garrett Grolemund* y *Hadley Wickham* que estaba en la guia docente.
+
+Para hacer las graficas : **VISUALISE**
+
+- [The R Graph Gallery](https://www.r-graph-gallery.com/). Visto en clase.
+
+- [Otra Galeria](http://www.ggplot2-exts.org/gallery/). No visto en clase.
+
+Para comunicar los resultados : **COMMUNICATE**
+
+- [R Markdown: The Definitive Guide](https://bookdown.org/yihui/rmarkdown/). Un libro de *Yihui Xie*, *J. J. Allaire*, *Garrett Grolemund*.
+
+
